@@ -261,6 +261,9 @@ def crunch_numbers(state):
         # MSR enumerated by Indirect Branch Restricted Speculation/Indirect
         # Branch Prediction Barrier enumeration.
         IBRSB: [STIBP],
+        
+        # SGX Launch Control depends on SGX
+        SGX: [SGX_LC],
     }
 
     deep_features = tuple(sorted(deps.keys()))
