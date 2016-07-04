@@ -56,6 +56,7 @@ obj-y += platform_hypercall.o x86_64/platform_hypercall.o
 obj-y += psr.o
 obj-y += setup.o
 obj-y += shutdown.o
+obj-y += sgx.o
 obj-y += smp.o
 obj-y += smpboot.o
 obj-y += spec_ctrl.o
