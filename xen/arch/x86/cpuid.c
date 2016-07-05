@@ -9,6 +9,7 @@
 #include <asm/paging.h>
 #include <asm/processor.h>
 #include <asm/xstate.h>
+#include <asm/sgx.h>
 
 const uint32_t known_features[] = INIT_KNOWN_FEATURES;
 const uint32_t special_features[] = INIT_SPECIAL_FEATURES;
@@ -187,6 +188,33 @@ static void recalculate_xstate(struct cpuid_policy *p)
     }
 }
 
+static void recalculate_sgx(struct cpuid_policy *p)
+{
+    if ( !p->feat.sgx || !p->sgx.sgx1 )
+    {
+        memset(&p->sgx, 0, sizeof (p->sgx));
+        return;
+    }
+
+    /*
+     * SDM 42.7.2.1 SECS.ATTRIBUTE.XFRM:
+     *
+     * Legal value for SECS.ATTRIBUTE.XFRM conform to these requirements:
+     *  - XFRM[1:0] must be set to 0x3;
+     *  - If processor does not support XSAVE, or if the system software has not
+     *    enabled XSAVE, then XFRM[63:2] must be 0.
+     *  - If the processor does support XSAVE, XFRM must contain a value that
+     *    would be legal if loaded into XCR0.
+     */
+    p->sgx.xfrm_low = 0x3;
+    p->sgx.xfrm_high = 0;
+    if ( p->basic.xsave )
+    {
+        p->sgx.xfrm_low |= p->xstate.xcr0_low;
+        p->sgx.xfrm_high |= p->xstate.xcr0_high;
+    }
+}
+
 /*
  * Misc adjustments to the policy.  Mostly clobbering reserved fields and
  * duplicating shared fields.  Intentionally hidden fields are annotated.
@@ -268,7 +296,7 @@ static void __init calculate_raw_policy(void)
     {
         switch ( i )
         {
-        case 0x4: case 0x7: case 0xd:
+        case 0x4: case 0x7: case 0xd: case 0x12:
             /* Multi-invocation leaves.  Deferred. */
             continue;
         }
@@ -328,6 +356,19 @@ static void __init calculate_raw_policy(void)
         }
     }
 
+    if ( p->basic.max_leaf >= SGX_CPUID )
+    {
+        /*
+         * For raw policy we just report native CPUID. For EPC on native it's
+         * possible that we will have multiple EPC sections (meaning subleaf 3,
+         * 4, ... may also be valid), but as the policy is for guest so we only
+         * need one EPC section (subleaf 2).
+         */
+        cpuid_count_leaf(SGX_CPUID, 0, &p->sgx.raw[0]);
+        cpuid_count_leaf(SGX_CPUID, 1, &p->sgx.raw[1]);
+        cpuid_count_leaf(SGX_CPUID, 2, &p->sgx.raw[2]);
+    }
+
     /* Extended leaves. */
     cpuid_leaf(0x80000000, &p->extd.raw[0]);
     for ( i = 1; i < min(ARRAY_SIZE(p->extd.raw),
@@ -353,6 +394,7 @@ static void __init calculate_host_policy(void)
     cpuid_featureset_to_policy(boot_cpu_data.x86_capability, p);
     recalculate_xstate(p);
     recalculate_misc(p);
+    recalculate_sgx(p);
 
     if ( p->extd.svm )
     {
@@ -396,6 +438,7 @@ static void __init calculate_pv_max_policy(void)
     sanitise_featureset(pv_featureset);
     cpuid_featureset_to_policy(pv_featureset, p);
     recalculate_xstate(p);
+    recalculate_sgx(p);
 
     p->extd.raw[0xa] = EMPTY_LEAF; /* No SVM for PV guests. */
 }
@@ -463,6 +506,7 @@ static void __init calculate_hvm_max_policy(void)
     sanitise_featureset(hvm_featureset);
     cpuid_featureset_to_policy(hvm_featureset, p);
     recalculate_xstate(p);
+    recalculate_sgx(p);
 }
 
 void __init init_guest_cpuid(void)
@@ -578,6 +622,14 @@ void recalculate_cpuid_policy(struct domain *d)
     if ( p->basic.max_leaf < XSTATE_CPUID )
         __clear_bit(X86_FEATURE_XSAVE, fs);
 
+    /*
+     * We check cpu_has_sgx here because during boot up SGX may be disabled
+     * via disable_sgx(), e.g. BIOS disables SGX by setting
+     * IA32_FEATURE_CONTROL_SGX_ENABLE=0
+     */
+    if ( p->basic.max_leaf < SGX_CPUID || !cpu_has_sgx )
+        __clear_bit(X86_FEATURE_SGX, fs);
+
     sanitise_featureset(fs);
 
     /* Fold host's FDP_EXCP_ONLY and NO_FPU_SEL into guest's view. */
@@ -600,6 +652,7 @@ void recalculate_cpuid_policy(struct domain *d)
 
     recalculate_xstate(p);
     recalculate_misc(p);
+    recalculate_sgx(p);
 
     /*
      * Override STIBP to match IBRS.  Guests can safely use STIBP
@@ -702,6 +755,13 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
                 return;
 
             *res = p->xstate.raw[subleaf];
+            break;
+
+        case SGX_CPUID:
+            if ( !p->feat.sgx || subleaf >= ARRAY_SIZE(p->sgx.raw) )
+                return;
+
+            *res = p->sgx.raw[subleaf];
             break;
 
         default:
