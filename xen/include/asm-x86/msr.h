@@ -238,6 +238,11 @@ struct msr_vcpu_policy
         bool available; /* This MSR is non-architectural */
         bool cpuid_faulting;
     } misc_features_enables;
+
+    struct {
+        bool lewr;
+        uint64_t ia32_sgxlepubkeyhash[4];
+    } sgx;
 };
 
 void init_guest_msr_policy(void);

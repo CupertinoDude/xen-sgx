@@ -23,6 +23,7 @@
 #include <xen/lib.h>
 #include <xen/sched.h>
 #include <asm/msr.h>
+#include <asm/sgx.h>
 
 struct msr_domain_policy __read_mostly hvm_max_msr_domain_policy,
                          __read_mostly  pv_max_msr_domain_policy;
@@ -112,6 +113,8 @@ int init_vcpu_msr_policy(struct vcpu *v)
     /* See comment in intel_ctxt_switch_levelling() */
     if ( is_control_domain(d) )
         vp->misc_features_enables.available = false;
+
+    sgx_msr_vcpu_init(v, vp);
 
     v->arch.msr = vp;
 

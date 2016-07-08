@@ -24,6 +24,7 @@
 #include <xen/types.h>
 #include <xen/init.h>
 #include <asm/processor.h>
+#include <asm/msr.h>
 #include <public/hvm/params.h>   /* HVM_PARAM_SGX */
 
 #define SGX_CPUID 0x12
@@ -59,6 +60,8 @@ void detect_sgx(struct sgx_cpuinfo *sgxinfo);
 void disable_sgx(void);
 #define sgx_lewr() (boot_sgx_cpudata.lewr)
 
+DECLARE_PER_CPU(uint64_t[4], cpu_ia32_sgxlepubkeyhash);
+
 struct page_info *alloc_epc_page(void);
 void free_epc_page(struct page_info *epg);
 
@@ -73,5 +76,11 @@ int domain_populate_epc(struct domain *d, unsigned long epc_base_pfn,
         unsigned long epc_npages);
 int domain_reset_epc(struct domain *d, bool free_epc);
 int domain_destroy_epc(struct domain *d);
+
+void sgx_set_vcpu_sgxlepubkeyhash(struct vcpu *v, int idx, uint64_t val);
+void sgx_ctxt_switch_to(struct vcpu *v);
+void sgx_msr_vcpu_init(struct vcpu *v, struct msr_vcpu_policy *vp);
+int sgx_msr_read_intercept(struct vcpu *v, unsigned int msr, u64 *msr_content);
+int sgx_msr_write_intercept(struct vcpu *v, unsigned int msr, u64 msr_content);
 
 #endif  /* __ASM_X86_SGX_H__ */
