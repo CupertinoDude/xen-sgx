@@ -40,6 +40,7 @@
 #include <asm/shadow.h>
 #include <asm/tboot.h>
 #include <asm/apic.h>
+#include <asm/sgx.h>
 
 static bool_t __read_mostly opt_vpid_enabled = 1;
 boolean_param("vpid", opt_vpid_enabled);
@@ -143,6 +144,7 @@ static void __init vmx_display_features(void)
     P(cpu_has_vmx_virt_exceptions, "Virtualisation Exceptions");
     P(cpu_has_vmx_pml, "Page Modification Logging");
     P(cpu_has_vmx_tsc_scaling, "TSC Scaling");
+    P(cpu_has_vmx_encls, "SGX ENCLS Exiting");
 #undef P
 
     if ( !printed )
@@ -238,7 +240,8 @@ static int vmx_init_vmcs_config(void)
                SECONDARY_EXEC_ENABLE_VM_FUNCTIONS |
                SECONDARY_EXEC_ENABLE_VIRT_EXCEPTIONS |
                SECONDARY_EXEC_XSAVES |
-               SECONDARY_EXEC_TSC_SCALING);
+               SECONDARY_EXEC_TSC_SCALING |
+               SECONDARY_EXEC_ENABLE_ENCLS);
         rdmsrl(MSR_IA32_VMX_MISC, _vmx_misc_cap);
         if ( _vmx_misc_cap & VMX_MISC_VMWRITE_ALL )
             opt |= SECONDARY_EXEC_ENABLE_VMCS_SHADOWING;
@@ -340,6 +343,14 @@ static int vmx_init_vmcs_config(void)
             printk(XENLOG_INFO "Disable Pause-Loop Exiting.\n");
         _vmx_secondary_exec_control &= ~ SECONDARY_EXEC_PAUSE_LOOP_EXITING;
     }
+
+    /*
+     * Turn off SGX if ENCLS VMEXIT is not present. Actually on real machine,
+     * if SGX CPUID is present (CPUID.0x7.0x0:EBX.SGX = 1), then ENCLS VMEXIT
+     * will always be present. We do the check anyway here.
+     */
+    if ( !(_vmx_secondary_exec_control & SECONDARY_EXEC_ENABLE_ENCLS) )
+        disable_sgx();
 
     min = VM_EXIT_ACK_INTR_ON_EXIT;
     opt = VM_EXIT_SAVE_GUEST_PAT | VM_EXIT_LOAD_HOST_PAT |
@@ -1132,6 +1143,9 @@ static int construct_vmcs(struct vcpu *v)
 
     /* Disable PML anyway here as it will only be enabled in log dirty mode */
     v->arch.hvm_vmx.secondary_exec_control &= ~SECONDARY_EXEC_ENABLE_PML;
+
+    /* Disable ENCLS VMEXIT. It will only be turned on when needed. */
+    v->arch.hvm_vmx.secondary_exec_control &= ~SECONDARY_EXEC_ENABLE_ENCLS;
 
     /* Host data selectors. */
     __vmwrite(HOST_SS_SELECTOR, __HYPERVISOR_DS);
