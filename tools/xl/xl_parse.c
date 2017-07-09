@@ -804,6 +804,60 @@ int parse_usbdev_config(libxl_device_usbdev *usbdev, char *token)
     return 0;
 }
 
+static uint64_t swap_uint64(uint64_t u)
+{
+    u = ((u << 8) & 0xFF00FF00FF00FF00ULL) | ((u >> 8) & 0x00FF00FF00FF00FFULL);
+    u = ((u << 16) & 0xFFFF0000FFFF0000ULL) | ((u >> 16) & 0x0000FFFF0000FFFFULL);
+    return (u << 32) | (u >> 32);
+}
+
+int parse_sgx_config(libxl_sgx_buildinfo *sgx, char *token)
+{
+    char *oparg;
+    long l;
+
+    if (MATCH_OPTION("epc", token, oparg)) {
+        l = strtol(oparg, NULL, 0);
+
+        /* Get EPC size. EPC base is calculated by toolstack later. */
+        if (l >= 0) {
+            sgx->epc_kb = l * 1024;
+        }
+    } else if (MATCH_OPTION("lehash", token, oparg)) {
+        if (strlen(oparg) != 64) { /* not 256bit hash */
+            fprintf(stderr, "'lehash=<...>' requires 256bit SHA256 hash\n");
+            return 1;
+        }
+
+        char buf[17];
+
+        memset(buf, 0, 17);
+
+        memcpy(buf, oparg, 16);
+        oparg += 16;
+        sgx->lehash0 = swap_uint64(strtoull(buf, NULL, 16));
+
+        memcpy(buf, oparg, 16);
+        oparg += 16;
+        sgx->lehash1 = swap_uint64(strtoull(buf, NULL, 16));
+
+        memcpy(buf, oparg, 16);
+        oparg += 16;
+        sgx->lehash2 = swap_uint64(strtoull(buf, NULL, 16));
+
+        memcpy(buf, oparg, 16);
+        oparg += 16;
+        sgx->lehash3 = swap_uint64(strtoull(buf, NULL, 16));
+    } else if (MATCH_OPTION("lewr", token, oparg)) {
+        libxl_defbool_set(&sgx->lewr, !!strtoul(oparg, NULL, 0));
+    } else {
+        fprintf(stderr, "Unknown string `%s' in sgx config\n", token);
+        return 1;
+    }
+
+    return 0;
+}
+
 int parse_vdispl_config(libxl_device_vdispl *vdispl, char *token)
 {
     char *oparg;
@@ -1333,6 +1387,28 @@ void parse_config_data(const char *config_source,
 
         if (!xlu_cfg_get_long (config, "rdm_mem_boundary", &l, 0))
             b_info->u.hvm.rdm_mem_boundary_memkb = l * 1024;
+
+        if (!xlu_cfg_get_string(config, "sgx", &buf, 0)) {
+            char *buf2 = strdup(buf);
+            char *p;
+
+            b_info->u.hvm.sgx.lehash0 = 0;
+            b_info->u.hvm.sgx.lehash1 = 0;
+            b_info->u.hvm.sgx.lehash2 = 0;
+            b_info->u.hvm.sgx.lehash3 = 0;
+
+            p = strtok(buf2, ",");
+            if (!p)
+                goto skip_sgx;
+            do {
+                while (*p == ' ')
+                    p++;
+                if (parse_sgx_config(&b_info->u.hvm.sgx, p))
+                    exit(1);
+            } while ((p = strtok(NULL, ",")) != NULL);
+skip_sgx:
+            free(buf2);
+        }
 
         switch (xlu_cfg_get_list(config, "mca_caps",
                                  &mca_caps, &num_mca_caps, 1))

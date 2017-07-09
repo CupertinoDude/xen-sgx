@@ -31,6 +31,7 @@ void parse_disk_config_multistring(XLU_Config **config,
                                    libxl_device_disk *disk);
 int parse_usbctrl_config(libxl_device_usbctrl *usbctrl, char *token);
 int parse_usbdev_config(libxl_device_usbdev *usbdev, char *token);
+int parse_sgx_config(libxl_sgx_buildinfo *sgx, char *token);
 int parse_cpurange(const char *cpu, libxl_bitmap *cpumap);
 int parse_nic_config(libxl_device_nic *nic, XLU_Config **config, char *token);
 int parse_vdispl_config(libxl_device_vdispl *vdispl, char *token);

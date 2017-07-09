@@ -59,6 +59,14 @@ void libxl__rdm_setdefault(libxl__gc *gc, libxl_domain_build_info *b_info)
                             LIBXL_RDM_MEM_BOUNDARY_MEMKB_DEFAULT;
 }
 
+void libxl__sgx_setdefault(libxl__gc *gc, libxl_domain_build_info *b_info)
+{
+    if (b_info->u.hvm.sgx.epc_kb == LIBXL_MEMKB_DEFAULT)
+        b_info->u.hvm.sgx.epc_kb = 0;
+    b_info->u.hvm.sgx.epc_base = 0;
+    libxl_defbool_setdefault(&b_info->u.hvm.sgx.lewr, false);
+}
+
 int libxl__domain_build_info_setdefault(libxl__gc *gc,
                                         libxl_domain_build_info *b_info)
 {
@@ -359,6 +367,8 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
         libxl_defbool_setdefault(&b_info->u.hvm.gfx_passthru, false);
 
         libxl__rdm_setdefault(gc, b_info);
+
+        libxl__sgx_setdefault(gc, b_info);
         break;
     case LIBXL_DOMAIN_TYPE_PV:
         libxl_defbool_setdefault(&b_info->u.pv.e820_host, false);

@@ -457,6 +457,16 @@ libxl_altp2m_mode = Enumeration("altp2m_mode", [
     (3, "limited"),
     ], init_val = "LIBXL_ALTP2M_MODE_DISABLED")
 
+libxl_sgx_buildinfo = Struct("sgx_buildinfo", [
+    ("epc_base", uint64), # EPC base address
+    ("epc_kb", MemKB), # EPC size in KB
+    ("lehash0", uint64), # Default SGXPUBKEYHASH
+    ("lehash1", uint64), # Default SGXPUBKEYHASH
+    ("lehash2", uint64), # Default SGXPUBKEYHASH
+    ("lehash3", uint64), # Default SGXPUBKEYHASH
+    ("lewr", libxl_defbool), # SGXPUBKEYHASH writable or not
+    ], dir=DIR_IN)
+
 libxl_domain_build_info = Struct("domain_build_info",[
     ("max_vcpus",       integer),
     ("avail_vcpus",     libxl_bitmap),
@@ -581,6 +591,7 @@ libxl_domain_build_info = Struct("domain_build_info",[
                                        ("rdm", libxl_rdm_reserve),
                                        ("rdm_mem_boundary_memkb", MemKB),
                                        ("mca_caps",         uint64),
+                                       ("sgx", libxl_sgx_buildinfo),
                                        ])),
                  ("pv", Struct(None, [("kernel", string),
                                       ("slack_memkb", MemKB),
