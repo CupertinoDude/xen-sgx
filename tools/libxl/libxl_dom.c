@@ -358,6 +358,35 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
         return ERROR_FAIL;
     }
 
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM)
+    {
+        uint64_t lehash[4];
+
+        if ( !info->u.hvm.sgx.lehash0 && !info->u.hvm.sgx.lehash1 &&
+             !info->u.hvm.sgx.lehash2 && !info->u.hvm.sgx.lehash3 )
+        {
+            rc = xc_msr_sgx_set(ctx->xch, domid,
+                                libxl_defbool_val(info->u.hvm.sgx.lewr),
+                                NULL, info->max_vcpus);
+        }
+        else
+        {
+            lehash[0] = info->u.hvm.sgx.lehash0;
+            lehash[1] = info->u.hvm.sgx.lehash1;
+            lehash[2] = info->u.hvm.sgx.lehash2;
+            lehash[3] = info->u.hvm.sgx.lehash3;
+
+            rc = xc_msr_sgx_set(ctx->xch, domid,
+                                libxl_defbool_val(info->u.hvm.sgx.lewr),
+                                lehash, info->max_vcpus);
+        }
+
+        if (rc) {
+            LOG(ERROR, "Unable to set SGX related MSRs (%d)", rc);
+            return ERROR_FAIL;
+        }
+    }
+
     if (xc_domain_set_gnttab_limits(ctx->xch, domid, info->max_grant_frames,
                                     info->max_maptrack_frames) != 0) {
         LOG(ERROR, "Couldn't set grant table limits");

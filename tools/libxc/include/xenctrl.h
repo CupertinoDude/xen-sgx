@@ -1843,6 +1843,8 @@ void xc_cpuid_to_str(const unsigned int *regs,
 int xc_mca_op(xc_interface *xch, struct xen_mc *mc);
 int xc_mca_op_inject_v2(xc_interface *xch, unsigned int flags,
                         xc_cpumap_t cpumap, unsigned int nr_cpus);
+int xc_msr_sgx_set(xc_interface *xch, uint32_t domid, bool lewr,
+                   uint64_t *lehash, int max_vcpu);
 #endif
 
 struct xc_px_val {
