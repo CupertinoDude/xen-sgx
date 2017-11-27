@@ -58,4 +58,7 @@ void detect_sgx(struct sgx_cpuinfo *sgxinfo);
 void disable_sgx(void);
 #define sgx_lewr() (boot_sgx_cpudata.lewr)
 
+struct page_info *alloc_epc_page(void);
+void free_epc_page(struct page_info *epg);
+
 #endif  /* __ASM_X86_SGX_H__ */

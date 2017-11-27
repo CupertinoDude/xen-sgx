@@ -22,12 +22,21 @@
 #include <asm/cpufeature.h>
 #include <asm/msr-index.h>
 #include <asm/msr.h>
+#include <xen/errno.h>
+#include <xen/mm.h>
 #include <asm/sgx.h>
 
 struct sgx_cpuinfo __read_mostly boot_sgx_cpudata;
 
 static bool __read_mostly opt_sgx_enabled = false;
 boolean_param("sgx", opt_sgx_enabled);
+
+#define total_epc_npages (boot_sgx_cpudata.epc_size >> PAGE_SHIFT)
+#define epc_base_mfn (boot_sgx_cpudata.epc_base >> PAGE_SHIFT)
+#define epc_base_maddr (boot_sgx_cpudata.epc_base)
+#define epc_end_maddr (epc_base_maddr + boot_sgx_cpudata.epc_size)
+
+static void *epc_base_vaddr = NULL;
 
 static void __detect_sgx(struct sgx_cpuinfo *sgxinfo)
 {
@@ -166,9 +175,161 @@ static void __init print_sgx_cpuinfo(struct sgx_cpuinfo *sgxinfo)
            boot_sgx_cpudata.epc_base + boot_sgx_cpudata.epc_size);
 }
 
+struct ft_page {
+    struct page_info *pg;
+    unsigned int order;
+    unsigned long idx;
+    struct list_head list;
+};
+
+static int extend_epc_frametable(unsigned long smfn, unsigned long emfn)
+{
+    unsigned long idx;
+    LIST_HEAD(ft_pages);
+    struct ft_page *ftp, *nftp;
+    int rc = 0;
+
+    for ( ; smfn < emfn; smfn += PDX_GROUP_COUNT )
+    {
+        idx = pfn_to_pdx(smfn) / PDX_GROUP_COUNT;
+
+        if (!test_bit(idx, pdx_group_valid))
+        {
+            unsigned long s = (unsigned long)pdx_to_page(idx * PDX_GROUP_COUNT);
+            struct page_info *pg;
+
+            ftp = xzalloc(struct ft_page);
+
+            if ( !ftp )
+            {
+                rc = -ENOMEM;
+                goto out;
+            }
+
+            pg = alloc_domheap_pages(NULL, PDX_GROUP_SHIFT - PAGE_SHIFT, 0);
+
+            if ( !pg )
+            {
+                xfree(ftp);
+                rc = -ENOMEM;
+                goto out;
+            }
+
+            ftp->order = PDX_GROUP_SHIFT - PAGE_SHIFT;
+            ftp->pg = pg;
+            ftp->idx = idx;
+
+            list_add_tail(&ftp->list, &ft_pages);
+
+            map_pages_to_xen(s, page_to_mfn(pg),
+                             1UL << (PDX_GROUP_SHIFT - PAGE_SHIFT),
+                             PAGE_HYPERVISOR);
+            memset((void *)s, 0, sizeof(struct page_info) * PDX_GROUP_COUNT);
+        }
+    }
+
+out:
+    list_for_each_entry_safe(ftp, nftp, &ft_pages, list)
+    {
+        if ( rc )
+        {
+            unsigned long s = (unsigned long)pdx_to_page(ftp->idx * PDX_GROUP_COUNT);
+
+            destroy_xen_mappings(s, s + (1UL << PDX_GROUP_SHIFT));
+            free_domheap_pages(ftp->pg, ftp->order);
+        }
+        list_del(&ftp->list);
+        xfree(ftp);
+    }
+
+    if ( !rc )
+        set_pdx_range(smfn, emfn);
+
+    return rc;
+}
+
+static int __init init_epc_frametable(unsigned long mfn, unsigned long npages)
+{
+    return extend_epc_frametable(mfn, mfn + npages);
+}
+
+static int __init init_epc_heap(void)
+{
+    struct page_info *pg;
+    unsigned long nrpages = total_epc_npages;
+    unsigned long i;
+    int rc = 0;
+
+    rc = init_epc_frametable(epc_base_mfn, nrpages);
+
+    if ( rc )
+        return rc;
+
+    for ( i = 0; i < nrpages; i++ )
+    {
+        pg = mfn_to_page(epc_base_mfn + i);
+        pg->count_info |= PGC_epc;
+    }
+
+    init_domheap_pages(epc_base_maddr, epc_end_maddr);
+
+    return rc;
+}
+
+struct page_info *alloc_epc_page(void)
+{
+    struct page_info *pg = alloc_domheap_page(NULL, MEMF_epc);
+
+    if ( !pg )
+        return NULL;
+
+    /*
+     * PGC_epc will be cleared in free_heap_pages(), so we add it back at
+     * allocation time, so that is_epc_page() will return true, when this page
+     * gets freed.
+     */
+    pg->count_info |= PGC_epc;
+
+    return pg;
+}
+
+void free_epc_page(struct page_info *epg)
+{
+    free_domheap_page(epg);
+}
+
+
+static int __init sgx_init_epc(void)
+{
+    int rc = 0;
+
+    epc_base_vaddr = ioremap_wb(epc_base_maddr,
+                                total_epc_npages << PAGE_SHIFT);
+
+    if ( !epc_base_maddr )
+    {
+        printk("Failed to ioremap_wb EPC range. Disable SGX.\n");
+
+        return -EFAULT;
+    }
+
+    rc = init_epc_heap();
+
+    if ( rc )
+    {
+        printk("Failed to init heap for EPC pages. Disable SGX.\n");
+        iounmap(epc_base_vaddr);
+    }
+
+    return rc;
+}
+
 static int __init sgx_init(void)
 {
     if ( !cpu_has_sgx )
+        goto not_supported;
+
+    if ( sgx_init_epc() )
         goto not_supported;
 
     print_sgx_cpuinfo(&boot_sgx_cpudata);
