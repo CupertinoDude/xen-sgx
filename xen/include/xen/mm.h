@@ -250,6 +250,8 @@ struct npfec {
 #define  MEMF_no_icache_flush (1U<<_MEMF_no_icache_flush)
 #define _MEMF_no_scrub    8
 #define  MEMF_no_scrub    (1U<<_MEMF_no_scrub)
+#define _MEMF_epc         9
+#define  MEMF_epc         (1U<<_MEMF_epc)
 #define _MEMF_node        16
 #define  MEMF_node_mask   ((1U << (8 * sizeof(nodeid_t))) - 1)
 #define  MEMF_node(n)     ((((n) + 1) & MEMF_node_mask) << _MEMF_node)
