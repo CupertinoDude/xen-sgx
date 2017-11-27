@@ -20,6 +20,7 @@
 
 #include <asm/hvm/io.h>
 #include <irq_vectors.h>
+#include <asm/sgx.h>
 
 extern void vmcs_dump_vcpu(struct vcpu *v);
 extern void setup_vmcs_dump(void);
@@ -63,6 +64,7 @@ struct vmx_domain {
     unsigned long apic_access_mfn;
     /* VMX_DOMAIN_* */
     unsigned int status;
+    struct sgx_domain sgx;
 };
 
 /*

@@ -25,6 +25,8 @@
 #include <xen/errno.h>
 #include <xen/mm.h>
 #include <asm/sgx.h>
+#include <xen/sched.h>
+#include <asm/p2m.h>
 
 struct sgx_cpuinfo __read_mostly boot_sgx_cpudata;
 
@@ -37,6 +39,344 @@ boolean_param("sgx", opt_sgx_enabled);
 #define epc_end_maddr (epc_base_maddr + boot_sgx_cpudata.epc_size)
 
 static void *epc_base_vaddr = NULL;
+
+static void *map_epc_page_to_xen(struct page_info *pg)
+{
+    BUG_ON(!epc_base_vaddr);
+
+    return (void *)((unsigned long)epc_base_vaddr +
+                    ((page_to_mfn(pg) - epc_base_mfn) << PAGE_SHIFT));
+}
+
+/* ENCLS opcode */
+#define ENCLS   .byte 0x0f, 0x01, 0xcf
+
+/*
+ * ENCLS leaf functions
+ *
+ * However currently we only needs EREMOVE..
+ */
+enum {
+    ECREATE = 0x0,
+    EADD    = 0x1,
+    EINIT   = 0x2,
+    EREMOVE = 0x3,
+    EDGBRD  = 0x4,
+    EDGBWR  = 0x5,
+    EEXTEND = 0x6,
+    ELDU    = 0x8,
+    EBLOCK  = 0x9,
+    EPA     = 0xA,
+    EWB     = 0xB,
+    ETRACK  = 0xC,
+    EAUG    = 0xD,
+    EMODPR  = 0xE,
+    EMODT   = 0xF,
+};
+
+/*
+ * ENCLS error code
+ *
+ * Currently we only need SGX_CHILD_PRESENT
+ */
+#define SGX_CHILD_PRESENT   13
+
+static inline int __encls(unsigned long rax, unsigned long rbx,
+                          unsigned long rcx, unsigned long rdx)
+{
+    int ret;
+
+    asm volatile ( "ENCLS;\n\t"
+            : "=a" (ret)
+            : "a" (rax), "b" (rbx), "c" (rcx), "d" (rdx)
+            : "memory", "cc");
+
+    return ret;
+}
+
+static inline int __eremove(void *epc)
+{
+    unsigned long rbx = 0, rdx = 0;
+
+    return __encls(EREMOVE, rbx, (unsigned long)epc, rdx);
+}
+
+static int sgx_eremove(struct page_info *epg)
+{
+    void *addr = map_epc_page_to_xen(epg);
+    int ret;
+
+    BUG_ON(!addr);
+
+    ret =  __eremove(addr);
+
+    return ret;
+}
+
+struct sgx_domain *to_sgx(struct domain *d)
+{
+    if (!is_hvm_domain(d))
+        return NULL;
+    else
+        return &d->arch.hvm_domain.vmx.sgx;
+}
+
+bool domain_epc_populated(struct domain *d)
+{
+    BUG_ON(!to_sgx(d));
+
+    return !!to_sgx(d)->epc_base_pfn;
+}
+
+/*
+ * Reset domain's EPC with EREMOVE. free_epc indicates whether to free EPC
+ * pages during reset. This will be called when domain goes into S3-S5 state
+ * (with free_epc being false), and when domain is destroyed (with free_epc
+ * being true).
+ *
+ * It is possible that EREMOVE will be called for SECS when it still has
+ * children present, in which case SGX_CHILD_PRESENT will be returned. In this
+ * case, SECS page is kept to a tmp list and after all EPC pages have been
+ * called with EREMOVE, we call EREMOVE for all the SECS pages again, and this
+ * time SGX_CHILD_PRESENT should never occur as all children should have been
+ * removed.
+ *
+ * If unexpected error returned by EREMOVE, it means the EPC page becomes
+ * abnormal, so it will not be freed even free_epc is true, as further use of
+ * this EPC can cause unexpected error, potentially damaging other domains.
+ */
+static int __domain_reset_epc(struct domain *d, unsigned long epc_base_pfn,
+        unsigned long epc_npages, bool free_epc)
+{
+    struct page_list_head secs_list;
+    struct page_info *epg, *tmp;
+    unsigned long i;
+    int ret = 0;
+
+    INIT_PAGE_LIST_HEAD(&secs_list);
+
+    for ( i = 0; i < epc_npages; i++ )
+    {
+        unsigned long gfn;
+        mfn_t mfn;
+        p2m_type_t t;
+        int r;
+
+        gfn = i + epc_base_pfn;
+        mfn = get_gfn_query(d, gfn, &t);
+        if ( unlikely(mfn_eq(mfn, INVALID_MFN)) )
+        {
+            printk("Domain %d: Reset EPC error: invalid MFN for gfn 0x%lx\n",
+                    d->domain_id, gfn);
+            put_gfn(d, gfn);
+            ret = -EFAULT;
+            continue;
+        }
+
+        if ( unlikely(!p2m_is_epc(t)) )
+        {
+            printk("Domain %d: Reset EPC error: (gfn 0x%lx, mfn 0x%lx): " 
+                    "is not p2m_epc.\n", d->domain_id, gfn, mfn_x(mfn));
+            put_gfn(d, gfn);
+            ret = -EFAULT;
+            continue;
+        }
+
+        put_gfn(d, gfn);
+
+        epg = mfn_to_page(mfn_x(mfn));
+
+        /* EREMOVE the EPC page to make it invalid */
+        r = sgx_eremove(epg);
+        if ( r == SGX_CHILD_PRESENT )
+        {
+            page_list_add_tail(epg, &secs_list);
+            continue;
+        }
+
+        if ( r )
+        {
+            printk("Domain %d: Reset EPC error: (gfn 0x%lx, mfn 0x%lx): "
+                    "EREMOVE returns %d\n", d->domain_id, gfn, mfn_x(mfn), r);
+            ret = r;
+            if ( free_epc )
+                printk("WARNING: EPC (mfn 0x%lx) becomes abnormal. "
+                        "Remove it from useable EPC.", mfn_x(mfn));
+            continue;
+        }
+
+        if ( free_epc )
+        {
+            /* If EPC page is going to be freed, then also remove the mapping */
+            if ( clear_epc_p2m_entry(d, gfn, mfn) )
+            {
+                printk("Domain %d: Reset EPC error: (gfn 0x%lx, mfn 0x%lx): "
+                        "clear p2m entry failed.\n", d->domain_id, gfn,
+                        mfn_x(mfn));
+                ret = -EFAULT;
+            }
+            free_epc_page(epg);
+        }
+    }
+
+    page_list_for_each_safe(epg, tmp, &secs_list)
+    {
+        int r;
+
+        r = sgx_eremove(epg);
+        if ( r )
+        {
+            printk("Domain %d: Reset EPC error: mfn 0x%lx: "
+                    "EREMOVE returns %d for SECS page\n",
+                    d->domain_id, page_to_mfn(epg), r);
+            ret = r;
+            page_list_del(epg, &secs_list);
+
+            if ( free_epc )
+                printk("WARNING: EPC (mfn 0x%lx) becomes abnormal. "
+                        "Remove it from useable EPC.",
+                        page_to_mfn(epg));
+            continue;
+        }
+
+        if ( free_epc )
+            free_epc_page(epg);
+    }
+
+    return ret;
+}
+
+static void __domain_unpopulate_epc(struct domain *d,
+        unsigned long epc_base_pfn, unsigned long populated_npages)
+{
+    unsigned long i;
+
+    for ( i = 0; i < populated_npages; i++ )
+    {
+        struct page_info *epg;
+        unsigned long gfn;
+        mfn_t mfn;
+        p2m_type_t t;
+
+        gfn = i + epc_base_pfn;
+        mfn = get_gfn_query(d, gfn, &t);
+        if ( unlikely(mfn_eq(mfn, INVALID_MFN)) )
+        {
+            /*
+             * __domain_unpopulate_epc only called when creating the domain on
+             * failure, therefore we can just ignore this error.
+             */
+            printk("%s: Domain %u gfn 0x%lx returns invalid mfn\n", __func__,
+                    d->domain_id, gfn);
+            put_gfn(d, gfn);
+            continue;
+        }
+
+        if ( unlikely(!p2m_is_epc(t)) )
+        {
+            printk("%s: Domain %u gfn 0x%lx returns non-EPC p2m type: %d\n",
+                    __func__, d->domain_id, gfn, (int)t);
+            put_gfn(d, gfn);
+            continue;
+        }
+
+        put_gfn(d, gfn);
+
+        if ( clear_epc_p2m_entry(d, gfn, mfn) )
+        {
+            printk("clear_epc_p2m_entry failed: gfn 0x%lx, mfn 0x%lx\n",
+                    gfn, mfn_x(mfn));
+            continue;
+        }
+
+        epg = mfn_to_page(mfn_x(mfn));
+        free_epc_page(epg);
+    }
+}
+
+static int __domain_populate_epc(struct domain *d, unsigned long epc_base_pfn,
+        unsigned long epc_npages)
+{
+    unsigned long i;
+    int ret;
+
+    for ( i = 0; i < epc_npages; i++ )
+    {
+        struct page_info *epg = alloc_epc_page();
+        unsigned long mfn;
+
+        if ( !epg )
+        {
+            printk("%s: Out of EPC\n", __func__);
+            ret = -ENOMEM;
+            goto err;
+        }
+
+        mfn = page_to_mfn(epg);
+        ret = set_epc_p2m_entry(d, i + epc_base_pfn, _mfn(mfn));
+        if ( ret )
+        {
+            printk("%s: set_epc_p2m_entry failed with %d: gfn 0x%lx, "
+                    "mfn 0x%lx\n", __func__, ret, i + epc_base_pfn, mfn);
+            free_epc_page(epg);
+            goto err;
+        }
+    }
+
+    return 0;
+
+err:
+    __domain_unpopulate_epc(d, epc_base_pfn, i);
+    return ret;
+}
+
+int domain_populate_epc(struct domain *d, unsigned long epc_base_pfn,
+        unsigned long epc_npages)
+{
+    struct sgx_domain *sgx = to_sgx(d);
+    int ret;
+
+    if ( !sgx )
+        return -EFAULT;
+
+    if ( domain_epc_populated(d) )
+        return -EBUSY;
+
+    if ( !epc_base_pfn || !epc_npages )
+        return -EINVAL;
+
+    if ( (ret = __domain_populate_epc(d, epc_base_pfn, epc_npages)) )
+        return ret;
+
+    sgx->epc_base_pfn = epc_base_pfn;
+    sgx->epc_npages = epc_npages;
+
+    return 0;
+}
+
+/*
+ *
+*
+ * This function returns error immediately if there's any unexpected error
+ * during this process.
+ */
+int domain_reset_epc(struct domain *d, bool free_epc)
+{
+    struct sgx_domain *sgx = to_sgx(d);
+
+    if ( !sgx )
+        return -EFAULT;
+
+    if ( !domain_epc_populated(d) )
+        return 0;
+
+    return __domain_reset_epc(d, sgx->epc_base_pfn, sgx->epc_npages, free_epc);
+}
+
+int domain_destroy_epc(struct domain *d)
+{
+    return domain_reset_epc(d, true);
+}
 
 static void __detect_sgx(struct sgx_cpuinfo *sgxinfo)
 {
