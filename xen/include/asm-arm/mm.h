@@ -55,6 +55,9 @@ struct page_info
                 /* Do TLBs need flushing for safety before next page use? */
                 bool need_tlbflush:1;
 
+                /* Could this page be scrubbed when it's free? */
+                bool scrubbable:1;
+
 #define BUDDY_NOT_SCRUBBING    0
 #define BUDDY_SCRUBBING        1
 #define BUDDY_SCRUB_ABORT      2
@@ -149,6 +152,10 @@ extern vaddr_t xenheap_virt_start;
 #define is_xen_heap_mfn(mfn) \
     (mfn_valid(_mfn(mfn)) && is_xen_heap_page(__mfn_to_page(mfn)))
 #endif
+
+#define page_scrubbable(_p)         true
+
+#define page_mergeable(_p1, _p2)    true
 
 #define is_xen_fixed_mfn(mfn)                                   \
     ((pfn_to_paddr(mfn) >= virt_to_maddr(&_start)) &&       \

@@ -170,6 +170,8 @@ struct page_info
 
                 /* Do TLBs need flushing for safety before next page use? */
                 bool need_tlbflush;
+                /* Could this page be scrubbed when it's free? */
+                bool scrubbable;
 
 #define BUDDY_NOT_SCRUBBING    0
 #define BUDDY_SCRUBBING        1
@@ -283,6 +285,11 @@ struct page_info
 
 /* OOS fixup entries */
 #define SHADOW_OOS_FIXUPS 2
+
+#define page_scrubbable(_p)     ((_p)->u.free.scrubbable)
+
+#define page_mergeable(_p1, _p2)                                        \
+    (page_scrubbable(_p1) == page_scrubbable(_p2))
 
 #define page_get_owner(_p)                                              \
     ((struct domain *)((_p)->v.inuse._domain ?                          \
