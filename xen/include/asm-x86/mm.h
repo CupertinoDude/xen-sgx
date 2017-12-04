@@ -629,4 +629,11 @@ static inline bool arch_mfn_in_directmap(unsigned long mfn)
     return mfn <= (virt_to_mfn(eva - 1) + 1);
 }
 
+extern void __iomem *__ioremap(paddr_t, size_t, unsigned int);
+
+static inline void __iomem *ioremap_wb(paddr_t pa, size_t len)
+{
+    return __ioremap(pa, len, PAGE_HYPERVISOR);
+}
+
 #endif /* __ASM_X86_MM_H__ */
