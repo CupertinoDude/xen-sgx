@@ -53,6 +53,7 @@ static int update_domain_cpuid_info(struct domain *d,
     struct cpuid_policy *p = d->arch.cpuid;
     const struct cpuid_leaf leaf = { ctl->eax, ctl->ebx, ctl->ecx, ctl->edx };
     int old_vendor = p->x86_vendor;
+    int ret = 0;
 
     /*
      * Skip update for leaves we don't care about.  This avoids the overhead
@@ -74,6 +75,11 @@ static int update_domain_cpuid_info(struct domain *d,
         if ( ctl->input[0] == XSTATE_CPUID &&
              ctl->input[1] != 1 ) /* Everything else automatically calculated. */
             return 0;
+
+        if ( ctl->input[0] == SGX_CPUID &&
+             ctl->input[1] >= ARRAY_SIZE(p->sgx.raw) )
+            return 0;
+
         break;
 
     case 0x40000000: case 0x40000100:
@@ -102,6 +108,10 @@ static int update_domain_cpuid_info(struct domain *d,
 
         case XSTATE_CPUID:
             p->xstate.raw[ctl->input[1]] = leaf;
+            break;
+
+        case SGX_CPUID:
+            p->sgx.raw[ctl->input[1]] = leaf;
             break;
 
         default:
@@ -255,6 +265,53 @@ static int update_domain_cpuid_info(struct domain *d,
         }
         break;
 
+    case 0x12:
+    {
+        uint64_t base_pfn, npages;
+        struct sgx_domain *sd;
+
+        if ( boot_cpu_data.x86_vendor != X86_VENDOR_INTEL )
+            break;
+
+        if ( ctl->input[1] != 2 )
+            break;
+
+        /* SGX has not enabled */
+        if ( !p->feat.sgx || !p->sgx.sgx1 )
+            break;
+
+        /*
+         * If SGX is enabled in CPUID, then we are expecting valid EPC resource
+         * in sub-leaf 0x2. Return -EFAULT to notify toolstack that there's
+         * something wrong.
+         */
+        if ( !p->sgx.base_valid || !p->sgx.size_valid )
+        {
+            ret = -EINVAL;
+            break;
+        }
+
+        base_pfn = (((uint64_t)(p->sgx.base_high)) << 20) |
+            (uint64_t)p->sgx.base_low;
+        npages = (((uint64_t)(p->sgx.npages_high)) << 20) |
+            (uint64_t)p->sgx.npages_low;
+
+        sd = to_sgx(d);
+
+        if ( !sd )
+        {
+            ret = -EFAULT;
+            break;
+        }
+
+        if ( !domain_epc_populated(d) )
+            ret = domain_populate_epc(d, base_pfn, npages);
+        else
+            if ( base_pfn != sd->epc_base_pfn || npages != sd->epc_npages )
+                ret = -EINVAL;
+
+        break;
+    }
     case 0x80000001:
         if ( is_pv_domain(d) && ((levelling_caps & LCAP_e1cd) == LCAP_e1cd) )
         {
@@ -299,7 +356,7 @@ static int update_domain_cpuid_info(struct domain *d,
         break;
     }
 
-    return 0;
+    return ret;
 }
 
 static int vcpu_set_vmce(struct vcpu *v,

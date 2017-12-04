@@ -61,10 +61,11 @@ extern struct cpuidmasks cpuidmask_defaults;
 /* Whether or not cpuid faulting is available for the current domain. */
 DECLARE_PER_CPU(bool, cpuid_faulting_enabled);
 
-#define CPUID_GUEST_NR_BASIC      (0xdu + 1)
+#define CPUID_GUEST_NR_BASIC      (0x12u + 1)
 #define CPUID_GUEST_NR_FEAT       (0u + 1)
 #define CPUID_GUEST_NR_CACHE      (5u + 1)
 #define CPUID_GUEST_NR_XSTATE     (62u + 1)
+#define CPUID_GUEST_NR_SGX        (0x2u + 1)
 #define CPUID_GUEST_NR_EXTD_INTEL (0x8u + 1)
 #define CPUID_GUEST_NR_EXTD_AMD   (0x1cu + 1)
 #define CPUID_GUEST_NR_EXTD       MAX(CPUID_GUEST_NR_EXTD_INTEL, \
@@ -168,6 +169,32 @@ struct cpuid_policy
             uint32_t _res_d;
         } comp[CPUID_GUEST_NR_XSTATE];
     } xstate;
+
+    union {
+        struct cpuid_leaf raw[CPUID_GUEST_NR_SGX];
+
+        struct {
+            /* Subleaf 0. */
+            bool sgx1:1, sgx2:1; uint32_t :30;
+            uint32_t miscselect;
+            uint32_t /* c */ :32;
+            uint8_t maxsize_legecy, maxsize_long; uint32_t :16; /* d */
+
+            /* Subleaf 1. */
+            bool init:1, debug:1, mode64:1, /*reserve*/:1, provisionkey:1,
+                     einittokenkey:1; uint32_t :26;
+            uint32_t /* SW reserved */ :32;
+            uint32_t xfrm_low, xfrm_high;
+
+            /* Subleaf 2. */
+            bool base_valid:1; uint32_t :11;
+            uint32_t base_low:20;
+            uint32_t base_high:20, :12;
+            bool size_valid:1; uint32_t :11;
+            uint32_t npages_low:20;
+            uint32_t npages_high:20, :12;
+        };
+    } sgx;
 
     /* Extended leaves: 0x800000xx */
     union {
