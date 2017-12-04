@@ -1049,6 +1049,9 @@ static void vmx_ctxt_switch_to(struct vcpu *v)
 
     if ( v->domain->arch.hvm_domain.pi_ops.switch_to )
         v->domain->arch.hvm_domain.pi_ops.switch_to(v);
+
+    if ( v->domain->arch.cpuid->feat.sgx_lc && sgx_lewr() )
+        sgx_ctxt_switch_to(v);
 }
 
 
@@ -2892,6 +2895,8 @@ static int is_last_branch_msr(u32 ecx)
 static int vmx_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
 {
     const struct vcpu *curr = current;
+    const struct msr_vcpu_policy *vp = curr->arch.msr;
+    const struct domain *d = current->domain;
 
     HVM_DBG_LOG(DBG_LEVEL_MSR, "ecx=%#x", msr);
 
@@ -2915,9 +2920,17 @@ static int vmx_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
             *msr_content |= IA32_FEATURE_CONTROL_LMCE_ON;
         if ( nestedhvm_enabled(curr->domain) )
             *msr_content |= IA32_FEATURE_CONTROL_ENABLE_VMXON_OUTSIDE_SMX;
+        if ( d->arch.cpuid->feat.sgx )
+            *msr_content |= IA32_FEATURE_CONTROL_SGX_ENABLE;
+        if ( vp->sgx.lewr )
+            *msr_content |= IA32_FEATURE_CONTROL_SGX_LE_WR;
         break;
     case MSR_IA32_VMX_BASIC...MSR_IA32_VMX_VMFUNC:
         if ( !nvmx_msr_read_intercept(msr, msr_content) )
+            goto gp_fault;
+        break;
+    case MSR_IA32_SGXLEPUBKEYHASH0 ... MSR_IA32_SGXLEPUBKEYHASH3:
+        if ( !sgx_msr_read_intercept(current, msr, msr_content) )
             goto gp_fault;
         break;
     case MSR_IA32_MISC_ENABLE:
@@ -3146,6 +3159,12 @@ static int vmx_msr_write_intercept(unsigned int msr, uint64_t msr_content)
     case MSR_IA32_VMX_BASIC ... MSR_IA32_VMX_VMFUNC:
         /* None of these MSRs are writeable. */
         goto gp_fault;
+        break;
+
+    case MSR_IA32_SGXLEPUBKEYHASH0...MSR_IA32_SGXLEPUBKEYHASH3:
+        if ( !sgx_msr_write_intercept(current, msr, msr_content) )
+            goto gp_fault;
+        break;
 
     case MSR_P6_PERFCTR(0)...MSR_P6_PERFCTR(7):
     case MSR_P6_EVNTSEL(0)...MSR_P6_EVNTSEL(7):

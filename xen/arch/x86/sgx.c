@@ -27,11 +27,14 @@
 #include <asm/sgx.h>
 #include <xen/sched.h>
 #include <asm/p2m.h>
+#include <xen/percpu.h>
 
 struct sgx_cpuinfo __read_mostly boot_sgx_cpudata;
 
 static bool __read_mostly opt_sgx_enabled = false;
 boolean_param("sgx", opt_sgx_enabled);
+
+DEFINE_PER_CPU(uint64_t[4], cpu_ia32_sgxlepubkeyhash);
 
 #define total_epc_npages (boot_sgx_cpudata.epc_size >> PAGE_SHIFT)
 #define epc_base_mfn (boot_sgx_cpudata.epc_base >> PAGE_SHIFT)
@@ -376,6 +379,126 @@ int domain_reset_epc(struct domain *d, bool free_epc)
 int domain_destroy_epc(struct domain *d)
 {
     return domain_reset_epc(d, true);
+}
+
+/* Digest of Intel signing key. MSR's default value after reset. */
+#define SGX_INTEL_DEFAULT_LEPUBKEYHASH0 0xa6053e051270b7ac
+#define SGX_INTEL_DEFAULT_LEPUBKEYHASH1 0x6cfbe8ba8b3b413d
+#define SGX_INTEL_DEFAULT_LEPUBKEYHASH2 0xc4916d99f2b3735d
+#define SGX_INTEL_DEFAULT_LEPUBKEYHASH3 0xd4f8c05909f9bb3b
+
+void sgx_set_vcpu_sgxlepubkeyhash(struct vcpu *v, int idx, uint64_t val)
+{
+    BUG_ON(idx < 0 || idx > 3);
+
+    v->arch.msr->sgx.ia32_sgxlepubkeyhash[idx] = val;
+}
+
+void sgx_msr_vcpu_init(struct vcpu *v, struct msr_vcpu_policy *vp)
+{
+    const struct domain *d = v->domain;
+
+    /* lewr is default false */
+    vp->sgx.lewr = false;
+
+    if ( d->arch.cpuid->feat.sgx_lc )
+    {
+        if ( sgx_lewr() )
+        {
+            vp->sgx.ia32_sgxlepubkeyhash[0] = SGX_INTEL_DEFAULT_LEPUBKEYHASH0;
+            vp->sgx.ia32_sgxlepubkeyhash[1] = SGX_INTEL_DEFAULT_LEPUBKEYHASH1;
+            vp->sgx.ia32_sgxlepubkeyhash[2] = SGX_INTEL_DEFAULT_LEPUBKEYHASH2;
+            vp->sgx.ia32_sgxlepubkeyhash[3] = SGX_INTEL_DEFAULT_LEPUBKEYHASH3;
+        }
+        else
+        {
+            rdmsrl(MSR_IA32_SGXLEPUBKEYHASH0, vp->sgx.ia32_sgxlepubkeyhash[0]);
+            rdmsrl(MSR_IA32_SGXLEPUBKEYHASH1, vp->sgx.ia32_sgxlepubkeyhash[1]);
+            rdmsrl(MSR_IA32_SGXLEPUBKEYHASH2, vp->sgx.ia32_sgxlepubkeyhash[2]);
+            rdmsrl(MSR_IA32_SGXLEPUBKEYHASH3, vp->sgx.ia32_sgxlepubkeyhash[3]);
+        }
+    }
+}
+
+#define sgx_try_to_write_msr(vp, i)                                     \
+do                                                                      \
+{                                                                       \
+    if ((vp)->sgx.ia32_sgxlepubkeyhash[i] !=                            \
+            this_cpu(cpu_ia32_sgxlepubkeyhash[i]))                      \
+    {                                                                   \
+        wrmsrl(MSR_IA32_SGXLEPUBKEYHASH##i,                             \
+               (vp)->sgx.ia32_sgxlepubkeyhash[i]);                      \
+        this_cpu(cpu_ia32_sgxlepubkeyhash[i]) =                         \
+                    (vp)->sgx.ia32_sgxlepubkeyhash[i];                  \
+    }                                                                   \
+} while (0)
+
+void sgx_ctxt_switch_to(struct vcpu *v)
+{
+    struct msr_vcpu_policy *vp = v->arch.msr;
+
+    sgx_try_to_write_msr(vp, 0);
+    sgx_try_to_write_msr(vp, 1);
+    sgx_try_to_write_msr(vp, 2);
+    sgx_try_to_write_msr(vp, 3);
+}
+
+int sgx_msr_read_intercept(struct vcpu *v, unsigned int msr, u64 *msr_content)
+{
+    const struct msr_vcpu_policy *vp = v->arch.msr;
+    const struct domain *d = v->domain;
+    u64 data;
+    int r = 1;
+
+    if ( !d->arch.cpuid->feat.sgx_lc )
+        return 0;
+
+    switch ( msr )
+    {
+    case MSR_IA32_SGXLEPUBKEYHASH0 ... MSR_IA32_SGXLEPUBKEYHASH3:
+        data = vp->sgx.ia32_sgxlepubkeyhash[msr - MSR_IA32_SGXLEPUBKEYHASH0];
+        *msr_content = data;
+
+        break;
+    default:
+        r = 0;
+        break;
+    }
+
+    return r;
+}
+
+int sgx_msr_write_intercept(struct vcpu *v, unsigned int msr, u64 msr_content)
+{
+    struct msr_vcpu_policy *vp = v->arch.msr;
+    const struct domain *d = v->domain;
+    int r = 1;
+
+    /*
+     * SDM 35.1 Model-Specific Registers, table 35-2.
+     *
+     * IA32_SGXLEPUBKEYHASH[0..3]:
+     *
+     * - If CPUID.0x7.0:ECX[30] = 1, FEATURE_CONTROL[17] is available.
+     * - Write permitted if CPUID.0x12.0:EAX[0] = 1 &&
+     *      FEATURE_CONTROL[17] = 1 && FEATURE_CONTROL[0] = 1.
+     */
+    if ( !d->arch.cpuid->feat.sgx_lc || !vp->sgx.lewr )
+        return 0;
+
+    switch ( msr )
+    {
+    case MSR_IA32_SGXLEPUBKEYHASH0...MSR_IA32_SGXLEPUBKEYHASH3:
+        vp->sgx.ia32_sgxlepubkeyhash[msr - MSR_IA32_SGXLEPUBKEYHASH0] =
+            msr_content;
+
+        break;
+    default:
+        r = 0;
+        break;
+    }
+
+    return r;
 }
 
 static void __detect_sgx(struct sgx_cpuinfo *sgxinfo)

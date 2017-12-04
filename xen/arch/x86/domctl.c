@@ -1352,12 +1352,15 @@ long arch_do_domctl(
 
         ret = -EINVAL;
         if ( (v == curr) || /* no vcpu_pause() */
-             !is_pv_domain(d) )
+             (!is_pv_domain(d) && !d->arch.cpuid->feat.sgx_lc) )
             break;
 
         /* Count maximum number of optional msrs. */
         if ( boot_cpu_has(X86_FEATURE_DBEXT) )
             nr_msrs += 4;
+
+        if ( d->arch.cpuid->feat.sgx_lc )
+            nr_msrs += 5;
 
         if ( domctl->cmd == XEN_DOMCTL_get_vcpu_msrs )
         {
@@ -1447,6 +1450,29 @@ long arch_do_domctl(
                     msr.index -= MSR_AMD64_DR1_ADDRESS_MASK - 1;
                     v->arch.pv_vcpu.dr_mask[msr.index] = msr.value;
                     continue;
+                case MSR_IA32_FEATURE_CONTROL:
+                    if ( msr.value & IA32_FEATURE_CONTROL_SGX_LE_WR )
+                    {
+                        if ( d->arch.cpuid->feat.sgx_lc && sgx_lewr())
+                        {
+                            v->arch.msr->sgx.lewr = true;
+                            continue;
+                        }
+                        else /* Try to set LE_WR while not supported */
+                            break;
+                    }
+		    continue;
+                case MSR_IA32_SGXLEPUBKEYHASH0 ... MSR_IA32_SGXLEPUBKEYHASH3:
+                    if ( d->arch.cpuid->feat.sgx_lc && sgx_lewr() )
+                    {
+                        sgx_set_vcpu_sgxlepubkeyhash(v,
+                                msr.index - MSR_IA32_SGXLEPUBKEYHASH0,
+                                msr.value);
+                        continue;
+                    }
+                    else
+                        break;
+		    continue;
                 }
                 break;
             }

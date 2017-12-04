@@ -23,6 +23,7 @@
 #include <xen/lib.h>
 #include <xen/sched.h>
 #include <asm/msr.h>
+#include <asm/sgx.h>
 
 struct msr_domain_policy __read_mostly hvm_max_msr_domain_policy,
                          __read_mostly  pv_max_msr_domain_policy;
@@ -112,6 +113,8 @@ int init_vcpu_msr_policy(struct vcpu *v)
     if ( is_control_domain(d) )
         vp->misc_features_enables.available = false;
 
+    sgx_msr_vcpu_init(v, vp);
+
     v->arch.msr = vp;
 
     return 0;
@@ -119,8 +122,9 @@ int init_vcpu_msr_policy(struct vcpu *v)
 
 int guest_rdmsr(const struct vcpu *v, uint32_t msr, uint64_t *val)
 {
-    const struct msr_domain_policy *dp = v->domain->arch.msr;
     const struct msr_vcpu_policy *vp = v->arch.msr;
+    const struct domain *d = v->domain;
+    const struct msr_domain_policy *dp = d->arch.msr;
 
     switch ( msr )
     {
