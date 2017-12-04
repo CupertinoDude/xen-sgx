@@ -11,6 +11,7 @@
 #include <asm/apic.h>
 #include <mach_apic.h>
 #include <asm/setup.h>
+#include <asm/sgx.h>
 #include <public/sysctl.h> /* for XEN_INVALID_{SOCKET,CORE}_ID */
 
 #include "cpu.h"
@@ -430,13 +431,27 @@ void identify_cpu(struct cpuinfo_x86 *c)
 	 * executed, c == &boot_cpu_data.
 	 */
 	if ( c != &boot_cpu_data ) {
+		struct sgx_cpuinfo tmp;
 		/* AND the already accumulated flags with these */
 		for ( i = 0 ; i < NCAPINTS ; i++ )
 			boot_cpu_data.x86_capability[i] &= c->x86_capability[i];
 
 		mcheck_init(c, false);
+		/*
+		 * Check SGX CPUID info all for all CPUs, and only support SGX when all
+		 * CPUs report the same SGX info. SDM (37.7.2 Intel SGX Resource
+		 * Enumeration Leaves) says "software should not assume that if Intel
+		 * SGX instructions are supported on one hardware thread, they are also
+		 * supported elsewhere.".  For simplicity, we only support SGX when all
+		 * CPUs reports consistent SGX info.
+		 */
+		detect_sgx(&tmp);
+		if ( memcmp(&tmp, &boot_sgx_cpudata, sizeof(tmp)) )
+			disable_sgx();
 	} else {
 		mcheck_init(c, true);
+
+		detect_sgx(&boot_sgx_cpudata);
 
 		mtrr_bp_init();
 	}

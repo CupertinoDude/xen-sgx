@@ -1601,6 +1601,14 @@ hypervisors handle SErrors:
   All SErrors will crash the whole system. This option will avoid all overhead
   of the dsb/isb pairs.
 
+### sgx (Intel)
+> = <boolean>
+
+> Default: false
+
+Flag to enable Software Guard Extensions support
+for guest.
+
 ### smap
 > `= <boolean> | hvm`
 
