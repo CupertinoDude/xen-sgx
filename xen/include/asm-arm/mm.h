@@ -153,6 +153,8 @@ extern vaddr_t xenheap_virt_start;
     (mfn_valid(_mfn(mfn)) && is_xen_heap_page(__mfn_to_page(mfn)))
 #endif
 
+#define is_epc_page(page)           false
+
 #define page_scrubbable(_p)         true
 
 #define page_mergeable(_p1, _p2)    true

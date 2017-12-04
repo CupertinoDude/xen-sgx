@@ -259,8 +259,10 @@ struct page_info
 #define PGC_state_free    PG_mask(3, 9)
 #define page_state_is(pg, st) (((pg)->count_info&PGC_state) == PGC_state_##st)
 
+#define _PGC_epc          PG_shift(10)
+#define PGC_epc           PG_mask(1, 10)
  /* Count of references to this frame. */
-#define PGC_count_width   PG_shift(9)
+#define PGC_count_width   PG_shift(10)
 #define PGC_count_mask    ((1UL<<PGC_count_width)-1)
 
 /*
@@ -271,6 +273,7 @@ struct page_info
 #define PGC_need_scrub    PGC_allocated
 
 #define is_xen_heap_page(page) ((page)->count_info & PGC_xen_heap)
+#define is_epc_page(page) ((page)->count_info & PGC_epc)
 #define is_xen_heap_mfn(mfn) \
     (__mfn_valid(mfn) && is_xen_heap_page(__mfn_to_page(mfn)))
 #define is_xen_fixed_mfn(mfn)                     \

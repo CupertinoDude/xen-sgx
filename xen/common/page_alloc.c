@@ -377,12 +377,14 @@ mfn_t __init alloc_boot_pages(unsigned long nr_pfns, unsigned long pfn_align)
  * BINARY BUDDY ALLOCATOR
  */
 
-#define MEMZONE_XEN 0
+#define MEMZONE_EPC 0
+#define MEMZONE_XEN 1
 #define NR_ZONES    (PADDR_BITS - PAGE_SHIFT + 1)
 
 #define bits_to_zone(b) (((b) < (PAGE_SHIFT + 1)) ? 1 : ((b) - PAGE_SHIFT))
-#define page_to_zone(pg) (is_xen_heap_page(pg) ? MEMZONE_XEN :  \
-                          (flsl(page_to_mfn(pg)) ? : 1))
+#define page_to_zone(pg) (is_epc_page(pg) ? MEMZONE_EPC :  \
+                          is_xen_heap_page(pg) ? MEMZONE_XEN :  \
+                          (flsl(page_to_mfn(pg)) ? : MEMZONE_XEN + 1))
 
 typedef struct page_list_head heap_by_zone_and_order_t[NR_ZONES][MAX_ORDER+1];
 static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
@@ -921,7 +923,12 @@ static struct page_info *alloc_heap_pages(
     }
 
     node = phys_to_nid(page_to_maddr(pg));
-    zone = page_to_zone(pg);
+
+    if ( memflags & MEMF_epc )
+        zone = MEMZONE_EPC;
+    else
+        zone = page_to_zone(pg);
+
     buddy_order = PFN_ORDER(pg);
 
     first_dirty = pg->u.free.first_dirty;
@@ -1332,9 +1339,13 @@ static void free_heap_pages(
     unsigned long mask, mfn = page_to_mfn(pg);
     unsigned int i, node = phys_to_nid(page_to_maddr(pg)), tainted = 0;
     unsigned int zone = page_to_zone(pg);
+    bool is_epc = false;
 
     ASSERT(order <= MAX_ORDER);
     ASSERT(node >= 0);
+
+    is_epc = is_epc_page(pg);
+    need_scrub = need_scrub && !is_epc;
 
     spin_lock(&heap_lock);
 
@@ -1364,11 +1375,13 @@ static void free_heap_pages(
         if ( pg[i].u.free.need_tlbflush )
             page_set_tlbflush_timestamp(&pg[i]);
 
-        pg[i].u.free.scrubbable = true;
+        pg[i].u.free.scrubbable = !is_epc;
 
         /* This page is not a guest frame any more. */
         page_set_owner(&pg[i], NULL); /* set_gpfn_from_mfn snoops pg owner */
-        set_gpfn_from_mfn(mfn + i, INVALID_M2P_ENTRY);
+
+        if ( !is_epc )
+            set_gpfn_from_mfn(mfn + i, INVALID_M2P_ENTRY);
 
         if ( need_scrub )
         {
@@ -2231,6 +2244,12 @@ struct page_info *alloc_domheap_pages(
 
     if ( memflags & MEMF_no_owner )
         memflags |= MEMF_no_refcount;
+
+    /* MEMF_epc implies MEMF_no_scrub */
+    if ((memflags & MEMF_epc) &&
+        !(pg = alloc_heap_pages(MEMZONE_EPC, MEMZONE_EPC, order,
+                                memflags | MEMF_no_scrub, d)))
+        return NULL;
 
     if ( dma_bitsize && ((dma_zone = bits_to_zone(dma_bitsize)) < zone_hi) )
         pg = alloc_heap_pages(dma_zone + 1, zone_hi, order, memflags, d);
