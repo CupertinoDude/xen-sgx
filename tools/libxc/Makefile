@@ -41,6 +41,7 @@ CTRL_SRCS-y       += xc_foreign_memory.c
 CTRL_SRCS-y       += xc_kexec.c
 CTRL_SRCS-y       += xc_resource.c
 CTRL_SRCS-$(CONFIG_X86) += xc_psr.c
+CTRL_SRCS-$(CONFIG_X86) += xc_sgx.c
 CTRL_SRCS-$(CONFIG_X86) += xc_pagetab.c
 CTRL_SRCS-$(CONFIG_Linux) += xc_linux.c
 CTRL_SRCS-$(CONFIG_FreeBSD) += xc_freebsd.c

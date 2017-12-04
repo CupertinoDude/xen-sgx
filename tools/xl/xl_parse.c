@@ -828,6 +828,16 @@ int parse_sgx_config(libxl_sgx_buildinfo *sgx, char *token)
             fprintf(stderr, "'lehash=<...>' requires 256bit SHA256 hash\n");
             return 1;
         }
+        
+        /*
+         * 'lehash' is a hex string of 32 bytes in little-endian, i.e. the
+         * leftmost byte is the least significant byte.
+         *
+         * We convert the hex string 8 bytes(64 bit) a time to uint64 via
+         * strtoull(). And strtoull() treats the string as big-endian,
+         * therefore we need to swap the value afterwards to get the correct
+         * value.
+         */
 
         char buf[17];
 
