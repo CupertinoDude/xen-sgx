@@ -1364,6 +1364,8 @@ static void free_heap_pages(
         if ( pg[i].u.free.need_tlbflush )
             page_set_tlbflush_timestamp(&pg[i]);
 
+        pg[i].u.free.scrubbable = true;
+
         /* This page is not a guest frame any more. */
         page_set_owner(&pg[i], NULL); /* set_gpfn_from_mfn snoops pg owner */
         set_gpfn_from_mfn(mfn + i, INVALID_M2P_ENTRY);
@@ -1402,7 +1404,8 @@ static void free_heap_pages(
             if ( !mfn_valid(_mfn(page_to_mfn(predecessor))) ||
                  !page_state_is(predecessor, free) ||
                  (PFN_ORDER(predecessor) != order) ||
-                 (phys_to_nid(page_to_maddr(predecessor)) != node) )
+                 (phys_to_nid(page_to_maddr(predecessor)) != node) ||
+                 !page_mergeable(predecessor, pg) )
                 break;
 
             check_and_stop_scrub(predecessor);
@@ -1425,7 +1428,8 @@ static void free_heap_pages(
             if ( !mfn_valid(_mfn(page_to_mfn(successor))) ||
                  !page_state_is(successor, free) ||
                  (PFN_ORDER(successor) != order) ||
-                 (phys_to_nid(page_to_maddr(successor)) != node) )
+                 (phys_to_nid(page_to_maddr(successor)) != node) ||
+                 !page_mergeable(successor, pg) )
                 break;
 
             check_and_stop_scrub(successor);
@@ -2379,7 +2383,7 @@ __initcall(pagealloc_keyhandler_init);
 
 void scrub_one_page(struct page_info *pg)
 {
-    if ( unlikely(pg->count_info & PGC_broken) )
+    if ( !page_scrubbable(pg) || unlikely(pg->count_info & PGC_broken) )
         return;
 
 #ifndef NDEBUG
