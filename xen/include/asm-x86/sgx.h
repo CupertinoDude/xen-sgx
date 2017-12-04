@@ -24,6 +24,7 @@
 #include <xen/types.h>
 #include <xen/init.h>
 #include <asm/processor.h>
+#include <public/hvm/params.h>   /* HVM_PARAM_SGX */
 
 #define SGX_CPUID 0x12
 
@@ -60,5 +61,17 @@ void disable_sgx(void);
 
 struct page_info *alloc_epc_page(void);
 void free_epc_page(struct page_info *epg);
+
+struct sgx_domain {
+    unsigned long epc_base_pfn;
+    unsigned long epc_npages;
+};
+
+struct sgx_domain *to_sgx(struct domain *d);
+bool domain_epc_populated(struct domain *d);
+int domain_populate_epc(struct domain *d, unsigned long epc_base_pfn,
+        unsigned long epc_npages);
+int domain_reset_epc(struct domain *d, bool free_epc);
+int domain_destroy_epc(struct domain *d);
 
 #endif  /* __ASM_X86_SGX_H__ */
