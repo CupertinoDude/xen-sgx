@@ -2307,6 +2307,12 @@ static bool vmx_get_pending_event(struct vcpu *v, struct x86_event *info)
     return true;
 }
 
+static void vmx_s3_suspend(struct domain *d)
+{
+    if ( d->arch.cpuid->feat.sgx )
+        domain_reset_epc(d, false);
+}
+
 static struct hvm_function_table __initdata vmx_function_table = {
     .name                 = "VMX",
     .cpu_up_prepare       = vmx_cpu_up_prepare,
@@ -2378,6 +2384,7 @@ static struct hvm_function_table __initdata vmx_function_table = {
         .max_ratio = VMX_TSC_MULTIPLIER_MAX,
         .setup     = vmx_setup_tsc_scaling,
     },
+    .s3_suspend = vmx_s3_suspend,
 };
 
 /* Handle VT-d posted-interrupt when VCPU is blocked. */
