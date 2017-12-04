@@ -1827,6 +1827,19 @@ int xc_domain_debug_control(xc_interface *xch,
                             uint32_t vcpu);
 
 #if defined(__i386__) || defined(__x86_64__)
+typedef struct xc_cpuid_policy_build_info_sgx {
+    uint64_t epc_base;
+    uint64_t epc_size;
+} xc_cpuid_policy_build_info_sgx_t;
+
+typedef struct xc_cpuid_policy_build_info {
+    xc_cpuid_policy_build_info_sgx_t sgx;
+} xc_cpuid_policy_build_info_t;
+
+int xc_cpuid_check(xc_interface *xch,
+                   const unsigned int *input,
+                   const char **config,
+                   char **config_transformed);
 int xc_cpuid_set(xc_interface *xch,
                  uint32_t domid,
                  const unsigned int *input,
@@ -1834,6 +1847,7 @@ int xc_cpuid_set(xc_interface *xch,
                  char **config_transformed);
 int xc_cpuid_apply_policy(xc_interface *xch,
                           uint32_t domid,
+                          xc_cpuid_policy_build_info_t *b_info,
                           uint32_t *featureset,
                           unsigned int nr_features);
 void xc_cpuid_to_str(const unsigned int *regs,
