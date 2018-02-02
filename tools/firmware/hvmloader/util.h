@@ -115,6 +115,10 @@ int hpet_exists(unsigned long hpet_base);
 void cpuid(uint32_t idx, uint32_t *eax, uint32_t *ebx,
            uint32_t *ecx, uint32_t *edx);
 
+/* Do cpuid instrction, with 'leaf' and 'subleaf' */
+void cpuid_subleaf(uint32_t leaf, uint32_t subleaf, uint32_t *eax,
+                   uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
+
 /* Read the TSC register. */
 static inline uint64_t rdtsc(void)
 {

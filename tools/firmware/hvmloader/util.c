@@ -330,6 +330,15 @@ cpuid(uint32_t idx, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
         : "0" (idx) );
 }
 
+void cpuid_subleaf(uint32_t leaf, uint32_t subleaf, uint32_t *eax,
+                   uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
+{
+    asm volatile (
+        "cpuid"
+        : "=a" (*eax), "=b" (*ebx), "=c" (*ecx), "=d" (*edx)
+        : "0" (leaf), "c" (subleaf) );
+}
+
 static const char hex_digits[] = "0123456789abcdef";
 
 /* Write a two-character hex representation of 'byte' to digits[].
@@ -888,6 +897,16 @@ static uint32_t acpi_lapic_id(unsigned cpu)
     return LAPIC_ID(cpu);
 }
 
+static void get_epc_info(struct acpi_config *config)
+{
+    uint32_t eax, ebx, ecx, edx;
+
+    cpuid_subleaf(0x12, 0x2, &eax, &ebx, &ecx, &edx);
+
+    config->epc_base = (uint64_t)(ebx & 0xfffff) << 32 | (eax & 0xfffff000);
+    config->epc_size = (uint64_t)(edx & 0xfffff) << 32 | (ecx & 0xfffff000);
+}
+
 void hvmloader_acpi_build_tables(struct acpi_config *config,
                                  unsigned int physical)
 {
@@ -936,6 +955,8 @@ void hvmloader_acpi_build_tables(struct acpi_config *config,
         config->pci_hi_start = pci_hi_mem_start;
         config->pci_hi_len = pci_hi_mem_end - pci_hi_mem_start;
     }
+
+    get_epc_info(config);
 
     s = xenstore_read("platform/generation-id", "0:0");
     if ( s )
